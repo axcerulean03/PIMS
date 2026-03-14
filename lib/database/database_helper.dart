@@ -21,7 +21,7 @@ class DatabaseHelper {
     _db = await factory.openDatabase(
       dbPath,
       options: OpenDatabaseOptions(
-        version: 3,
+        version: 4,
         onCreate: _onCreate,
         onUpgrade: _onUpgrade,
       ),
@@ -61,6 +61,17 @@ class DatabaseHelper {
         FOREIGN KEY (wfpId) REFERENCES wfp(id) ON DELETE CASCADE
       )
     ''');
+
+    await db.execute('''
+      CREATE TABLE audit_log (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        entityType  TEXT NOT NULL,
+        entityId    TEXT NOT NULL,
+        action      TEXT NOT NULL,
+        timestamp   TEXT NOT NULL,
+        diffJson    TEXT NOT NULL
+      )
+    ''');
   }
 
   /// Incremental migrations — safe to run on existing databases.
@@ -74,6 +85,19 @@ class DatabaseHelper {
     // v2 → v3: dueDate on wfp
     if (oldVersion < 3) {
       await _addColumnIfMissing(db, 'wfp', 'dueDate', 'TEXT');
+    }
+    // v3 → v4: audit_log table
+    if (oldVersion < 4) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS audit_log (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          entityType  TEXT NOT NULL,
+          entityId    TEXT NOT NULL,
+          action      TEXT NOT NULL,
+          timestamp   TEXT NOT NULL,
+          diffJson    TEXT NOT NULL
+        )
+      ''');
     }
   }
 
@@ -263,4 +287,46 @@ class DatabaseHelper {
     );
     return rows.map(BudgetActivity.fromMap).toList();
   }
+  // ─── Audit Log ─────────────────────────────────────────────────────────────
+
+  static Future<void> insertAuditLog({
+    required String entityType,
+    required String entityId,
+    required String action,
+    required String diffJson,
+  }) async {
+    final d = await db;
+    await d.insert('audit_log', {
+      'entityType': entityType,
+      'entityId':   entityId,
+      'action':     action,
+      'timestamp':  DateTime.now().toIso8601String(),
+      'diffJson':   diffJson,
+    });
+  }
+
+  static Future<List<Map<String, dynamic>>> getAuditLog({
+    int limit = 200,
+    String? entityType,
+    String? entityId,
+  }) async {
+    final d      = await db;
+    final where  = <String>[];
+    final args   = <dynamic>[];
+    if (entityType != null) { where.add('entityType = ?'); args.add(entityType); }
+    if (entityId   != null) { where.add('entityId = ?');   args.add(entityId); }
+    return d.query(
+      'audit_log',
+      where:    where.isEmpty ? null : where.join(' AND '),
+      whereArgs: args.isEmpty ? null : args,
+      orderBy:  'id DESC',
+      limit:    limit,
+    );
+  }
+
+  static Future<void> clearAuditLog() async {
+    final d = await db;
+    await d.delete('audit_log');
+  }
+
 }

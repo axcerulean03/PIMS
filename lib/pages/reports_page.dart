@@ -4,6 +4,7 @@ import '../models/wfp_entry.dart';
 import '../models/budget_activity.dart';
 import '../services/app_state.dart';
 import '../services/report_exporter.dart';
+import '../services/pdf_exporter.dart';
 import '../utils/currency_formatter.dart';
 
 // ─── Sort options ─────────────────────────────────────────────────────────────
@@ -51,10 +52,11 @@ class _ReportsPageState extends State<ReportsPage> {
   WFPEntry? _selectedWFP;
   List<BudgetActivity> _activities = [];
   bool _loadingActivities = false;
-  bool _exporting = false;
+  bool _exporting    = false;
+  bool _exportingPdf = false;
 
   // Grouped export
-  bool _groupedExporting = false;
+  bool _groupedExporting    = false;
 
   // Sort
   _SortField _sortField    = _SortField.year;
@@ -169,7 +171,8 @@ class _ReportsPageState extends State<ReportsPage> {
     setState(() => _exporting = true);
     try {
       final path = await ReportExporter.exportSummaryReport(
-        wfp: _selectedWFP!, activities: _activities);
+        wfp: _selectedWFP!, activities: _activities,
+        operatingUnit: widget.appState.operatingUnit);
       if (!mounted) return;
       _showResultDialog(path);
     } catch (e) {
@@ -177,6 +180,23 @@ class _ReportsPageState extends State<ReportsPage> {
       _showSnack('Export failed: $e', isError: true);
     } finally {
       if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  Future<void> _exportPdf() async {
+    if (_selectedWFP == null) return;
+    setState(() => _exportingPdf = true);
+    try {
+      final path = await PdfExporter.exportSummaryReportPDF(
+        wfp: _selectedWFP!, activities: _activities,
+        operatingUnit: widget.appState.operatingUnit);
+      if (!mounted) return;
+      _showResultDialog(path);
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('PDF export failed: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _exportingPdf = false);
     }
   }
 
@@ -192,14 +212,36 @@ class _ReportsPageState extends State<ReportsPage> {
       return;
     }
 
-    final byYear = <int, List<WFPEntry>>{};
-    final byFund = <String, List<WFPEntry>>{};
+    final byYear  = <int, List<WFPEntry>>{};
+    final byFund  = <String, List<WFPEntry>>{};
+    final byMonth = <String, List<WFPEntry>>{}; // key: "YYYY-MM"
+
+    // Month derived from approvedDate, then dueDate, then year-only fallback
+    String _monthKey(WFPEntry e) {
+      final date = e.approvedDate ?? e.dueDate;
+      if (date != null && date.length >= 7) return date.substring(0, 7); // "YYYY-MM"
+      return '${e.year}-??';
+    }
+
     for (final e in entries) {
       byYear.putIfAbsent(e.year, () => []).add(e);
       byFund.putIfAbsent(e.fundType, () => []).add(e);
+      byMonth.putIfAbsent(_monthKey(e), () => []).add(e);
     }
     final years     = byYear.keys.toList()..sort((a, b) => b.compareTo(a));
     final fundTypes = byFund.keys.toList()..sort();
+    final months    = byMonth.keys.toList()..sort((a, b) => b.compareTo(a));
+
+    const monthNames = ['', 'Jan','Feb','Mar','Apr','May','Jun',
+        'Jul','Aug','Sep','Oct','Nov','Dec'];
+    String _monthLabel(String key) {
+      if (key.endsWith('??')) return '${key.substring(0, 4)} (no date)';
+      final parts = key.split('-');
+      if (parts.length < 2) return key;
+      final m = int.tryParse(parts[1]) ?? 0;
+      final name = (m >= 1 && m <= 12) ? monthNames[m] : parts[1];
+      return '$name ${parts[0]}';
+    }
 
     showDialog<void>(
       context: context,
@@ -253,6 +295,10 @@ class _ReportsPageState extends State<ReportsPage> {
                       Navigator.of(ctx).pop();
                       _runGroupedExport(group, 'Year_$year');
                     },
+                    onPdfTap: () {
+                      Navigator.of(ctx).pop();
+                      _runGroupedExportPdf(group, 'Year_$year');
+                    },
                   );
                 }),
 
@@ -275,6 +321,39 @@ class _ReportsPageState extends State<ReportsPage> {
                       Navigator.of(ctx).pop();
                       _runGroupedExport(group, 'Fund_$fund');
                     },
+                    onPdfTap: () {
+                      Navigator.of(ctx).pop();
+                      _runGroupedExportPdf(group, 'Fund_$fund');
+                    },
+                  );
+                }),
+
+                const SizedBox(height: 16),
+
+                // ── By Month ──────────────────────────────────────────
+                const Text('Export by Month',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                const SizedBox(height: 4),
+                Text('Month derived from Approved Date or Due Date.',
+                  style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+                const SizedBox(height: 8),
+                ...months.map((month) {
+                  final group = byMonth[month]!;
+                  return _groupExportTile(
+                    ctx: ctx,
+                    icon: Icons.event_outlined,
+                    color: const Color(0xff9B5DE5),
+                    label: _monthLabel(month),
+                    subtitle: '${group.length} entr${group.length == 1 ? 'y' : 'ies'} — '
+                        '${group.map((e) => e.fundType).toSet().join(', ')}',
+                    onTap: () {
+                      Navigator.of(ctx).pop();
+                      _runGroupedExport(group, 'Month_${month.replaceAll('-', '_')}');
+                    },
+                    onPdfTap: () {
+                      Navigator.of(ctx).pop();
+                      _runGroupedExportPdf(group, 'Month_${month.replaceAll('-', '_')}');
+                    },
                   );
                 }),
 
@@ -292,6 +371,10 @@ class _ReportsPageState extends State<ReportsPage> {
                   onTap: () {
                     Navigator.of(ctx).pop();
                     _runGroupedExport(entries, 'AllFiltered');
+                  },
+                  onPdfTap: () {
+                    Navigator.of(ctx).pop();
+                    _runGroupedExportPdf(entries, 'AllFiltered');
                   },
                 ),
               ],
@@ -315,39 +398,62 @@ class _ReportsPageState extends State<ReportsPage> {
     required String label,
     required String subtitle,
     required VoidCallback onTap,
+    VoidCallback? onPdfTap,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey.shade200),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Icon(icon, size: 18, color: color),
-            ),
-            const SizedBox(width: 12),
-            Expanded(child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                const SizedBox(height: 2),
-                Text(subtitle, style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
-              ],
-            )),
-            Icon(Icons.download_outlined, size: 18, color: Colors.grey.shade400),
-          ]),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey.shade200),
+          borderRadius: BorderRadius.circular(8),
         ),
+        child: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Icon(icon, size: 18, color: color),
+          ),
+          const SizedBox(width: 12),
+          Expanded(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              const SizedBox(height: 2),
+              Text(subtitle, style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+            ],
+          )),
+          // PDF button
+          if (onPdfTap != null) ...[
+            TextButton.icon(
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.red.shade700,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              icon: const Icon(Icons.picture_as_pdf_outlined, size: 14),
+              label: const Text('PDF', style: TextStyle(fontSize: 11)),
+              onPressed: onPdfTap,
+            ),
+            const SizedBox(width: 4),
+          ],
+          // Excel button
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xff2F3E46),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            icon: const Icon(Icons.download_outlined, size: 14),
+            label: const Text('Excel', style: TextStyle(fontSize: 11)),
+            onPressed: onTap,
+          ),
+        ]),
       ),
     );
   }
@@ -358,7 +464,8 @@ class _ReportsPageState extends State<ReportsPage> {
       final ids    = entries.map((e) => e.id).toList();
       final actMap = await widget.appState.loadActivitiesMapForExport(ids);
       final path   = await ReportExporter.exportGroupedReport(
-        wfps: entries, activitiesMap: actMap, groupLabel: label);
+        wfps: entries, activitiesMap: actMap, groupLabel: label,
+        operatingUnit: widget.appState.operatingUnit);
       if (!mounted) return;
       _showResultDialog(path, isGrouped: true, count: entries.length);
     } catch (e) {
@@ -369,6 +476,20 @@ class _ReportsPageState extends State<ReportsPage> {
     }
   }
 
+  Future<void> _runGroupedExportPdf(List<WFPEntry> entries, String label) async {
+    try {
+      final ids    = entries.map((e) => e.id).toList();
+      final actMap = await widget.appState.loadActivitiesMapForExport(ids);
+      final path   = await PdfExporter.exportGroupedReportPDF(
+        wfps: entries, activitiesMap: actMap, groupLabel: label,
+        operatingUnit: widget.appState.operatingUnit);
+      if (!mounted) return;
+      _showResultDialog(path, isGrouped: true, count: entries.length);
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('PDF export failed: $e', isError: true);
+  }
+}
   // ─── Shared result dialog ─────────────────────────────────────────────────
 
   void _showResultDialog(String path, {bool isGrouped = false, int count = 1}) {
@@ -821,6 +942,23 @@ class _ReportsPageState extends State<ReportsPage> {
           const Spacer(),
           OutlinedButton(onPressed: _clearSelection, child: const Text('Clear')),
           const SizedBox(width: 10),
+          // PDF export
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.red.shade700,
+              side: BorderSide(color: Colors.red.shade300),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            ),
+            icon: _exportingPdf
+                ? SizedBox(width: 16, height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2,
+                      color: Colors.red.shade700))
+                : const Icon(Icons.picture_as_pdf_outlined, size: 18),
+            label: Text(_exportingPdf ? 'Exporting…' : 'PDF'),
+            onPressed: _exportingPdf ? null : _exportPdf,
+          ),
+          const SizedBox(width: 8),
+          // Excel export
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xff2F3E46),
@@ -831,7 +969,7 @@ class _ReportsPageState extends State<ReportsPage> {
                 ? const SizedBox(width: 16, height: 16,
                     child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                 : const Icon(Icons.download_outlined, size: 18),
-            label: Text(_exporting ? 'Exporting…' : 'Export to Excel'),
+            label: Text(_exporting ? 'Exporting…' : 'Excel'),
             onPressed: _exporting ? null : _export,
           ),
         ]),

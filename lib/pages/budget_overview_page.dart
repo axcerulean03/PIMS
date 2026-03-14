@@ -9,10 +9,10 @@ class BudgetOverviewPage extends StatefulWidget {
   final AppState appState;
   const BudgetOverviewPage({super.key, required this.appState});
   @override
-  State<BudgetOverviewPage> createState() => _BudgetOverviewPageState();
+  State<BudgetOverviewPage> createState() => BudgetOverviewPageState();
 }
 
-class _BudgetOverviewPageState extends State<BudgetOverviewPage> {
+class BudgetOverviewPageState extends State<BudgetOverviewPage> {
   final _activityName   = TextEditingController();
   final _total          = TextEditingController();
   final _projected      = TextEditingController();
@@ -21,6 +21,7 @@ class _BudgetOverviewPageState extends State<BudgetOverviewPage> {
   final _wfpSearch      = TextEditingController();
 
   String _status = 'Not Started';
+  String? _suggestedStatus; // auto-derived suggestion, null when no suggestion differs from _status
   String? _targetDate;
   BudgetActivity? _editingActivity;
 
@@ -143,6 +144,17 @@ class _BudgetOverviewPageState extends State<BudgetOverviewPage> {
     return total == 0 ? 1 : (total / _rowsPerPage).ceil();
   }
 
+  /// True when the activity form has unsaved data.
+  /// Public — called by DashboardPage when discarding unsaved changes.
+  void clearForm() => _clearForm();
+
+  bool get hasUnsavedChanges =>
+      _activityName.text.isNotEmpty ||
+      _total.text.isNotEmpty ||
+      _projected.text.isNotEmpty ||
+      _disbursed.text.isNotEmpty ||
+      _editingActivity != null;
+
   // ─── Form helpers ─────────────────────────────────────────────────────────
 
   void _loadActivityIntoForm(BudgetActivity a) {
@@ -150,12 +162,42 @@ class _BudgetOverviewPageState extends State<BudgetOverviewPage> {
     _total.text        = a.total.toString();
     _projected.text    = a.projected.toString();
     _disbursed.text    = a.disbursed.toString();
-    setState(() { _status = a.status; _targetDate = a.targetDate; _editingActivity = a; });
+    setState(() { _status = a.status; _suggestedStatus = null; _targetDate = a.targetDate; _editingActivity = a; });
   }
 
   void _clearForm() {
     _activityName.clear(); _total.clear(); _projected.clear(); _disbursed.clear();
-    setState(() { _status = 'Not Started'; _targetDate = null; _editingActivity = null; });
+    setState(() { _status = 'Not Started'; _suggestedStatus = null; _targetDate = null; _editingActivity = null; });
+  }
+
+  /// Derives a suggested status from the current numeric field values.
+  /// Returns null if the suggestion matches the current status (no chip needed).
+  String? _computeSuggestedStatus() {
+    final total     = double.tryParse(_total.text)     ?? 0;
+    final projected = double.tryParse(_projected.text) ?? 0;
+    final disbursed = double.tryParse(_disbursed.text) ?? 0;
+
+    String suggested;
+    if (total <= 0 && disbursed <= 0) {
+      suggested = 'Not Started';
+    } else if (projected > total && total > 0) {
+      suggested = 'At Risk'; // over-committed
+    } else if (disbursed >= total && total > 0) {
+      suggested = 'Completed';
+    } else if (disbursed > 0) {
+      suggested = 'Ongoing';
+    } else {
+      suggested = 'Not Started';
+    }
+
+    return suggested == _status ? null : suggested;
+  }
+
+  void _onAmountChanged() {
+    final suggestion = _computeSuggestedStatus();
+    if (suggestion != _suggestedStatus) {
+      setState(() => _suggestedStatus = suggestion);
+    }
   }
 
   Future<void> _pickTargetDate() async {
@@ -546,19 +588,55 @@ class _BudgetOverviewPageState extends State<BudgetOverviewPage> {
                             decoration: const InputDecoration(labelText: 'Activity Name *'));
                           final totalField = TextField(controller: _total,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(labelText: 'Total Amount (₱)'));
+                            decoration: const InputDecoration(labelText: 'Total Amount (₱)'),
+                            onChanged: (_) => _onAmountChanged());
                           final projField = TextField(controller: _projected,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(labelText: 'Projected / Obligated (₱)'));
+                            decoration: const InputDecoration(labelText: 'Projected / Obligated (₱)'),
+                            onChanged: (_) => _onAmountChanged());
                           final disbField = TextField(controller: _disbursed,
                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            decoration: const InputDecoration(labelText: 'Disbursed (₱)'));
+                            decoration: const InputDecoration(labelText: 'Disbursed (₱)'),
+                            onChanged: (_) => _onAmountChanged());
                           final statusDd = DropdownButton<String>(
                             value: _status,
                             items: _statusOptions.map((s) =>
                               DropdownMenuItem(value: s, child: Text(s))).toList(),
-                            onChanged: (v) => setState(() => _status = v!),
+                            onChanged: (v) => setState(() {
+                              _status = v!;
+                              _suggestedStatus = _computeSuggestedStatus();
+                            }),
                           );
+                          // Suggestion chip — shown when auto-derived status differs from current
+                          final suggestionChip = _suggestedStatus != null
+                              ? Padding(
+                                  padding: const EdgeInsets.only(left: 8),
+                                  child: GestureDetector(
+                                    onTap: () => setState(() {
+                                      _status = _suggestedStatus!;
+                                      _suggestedStatus = null;
+                                    }),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                      decoration: BoxDecoration(
+                                        color: Colors.blue.shade50,
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(color: Colors.blue.shade300),
+                                      ),
+                                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                        Icon(Icons.auto_fix_high, size: 13, color: Colors.blue.shade700),
+                                        const SizedBox(width: 5),
+                                        Text('Suggest: $_suggestedStatus',
+                                          style: TextStyle(fontSize: 11,
+                                            color: Colors.blue.shade700,
+                                            fontWeight: FontWeight.w600)),
+                                        const SizedBox(width: 4),
+                                        Icon(Icons.check, size: 12, color: Colors.blue.shade700),
+                                      ]),
+                                    ),
+                                  ),
+                                )
+                              : const SizedBox.shrink();
                           final targetDateField = InkWell(
                             onTap: _pickTargetDate,
                             child: InputDecorator(
@@ -599,7 +677,7 @@ class _BudgetOverviewPageState extends State<BudgetOverviewPage> {
                               nameField, const SizedBox(height: 8),
                               Row(children: [Expanded(child: totalField), const SizedBox(width: 8), Expanded(child: projField)]),
                               const SizedBox(height: 8),
-                              Row(children: [Expanded(child: disbField), const SizedBox(width: 8), statusDd]),
+                              Row(children: [Expanded(child: disbField), const SizedBox(width: 8), statusDd, suggestionChip]),
                               const SizedBox(height: 8),
                               Row(children: [Expanded(child: targetDateField), const SizedBox(width: 8), actionBtns]),
                             ]);
@@ -609,7 +687,7 @@ class _BudgetOverviewPageState extends State<BudgetOverviewPage> {
                             Expanded(child: totalField), const SizedBox(width: 10),
                             Expanded(child: projField), const SizedBox(width: 10),
                             Expanded(child: disbField), const SizedBox(width: 10),
-                            statusDd, const SizedBox(width: 10),
+                            statusDd, suggestionChip, const SizedBox(width: 10),
                             SizedBox(width: 150, child: targetDateField), const SizedBox(width: 10),
                             actionBtns,
                           ]);

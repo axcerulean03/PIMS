@@ -42,10 +42,11 @@ class Sidebar extends StatelessWidget {
               _badgeItem(Icons.schedule_outlined, 'Deadlines', 4, appState.deadlineWarningCount),
               _item(Icons.settings_outlined, 'Settings', 5),
               _item(Icons.person_outline, 'Profile', 6),
+              _item(Icons.history, 'Audit Log', 7),
               const Spacer(),
               const Divider(color: Colors.white24, height: 1),
               const SizedBox(height: 8),
-              _item(Icons.logout, 'Log Out', 7),
+              _item(Icons.logout, 'Log Out', 8),
               const SizedBox(height: 24),
             ],
           ),
@@ -55,7 +56,7 @@ class Sidebar extends StatelessWidget {
   }
 
   Widget _item(IconData icon, String label, int index) {
-    final active = currentIndex == index && index != 7;
+    final active = currentIndex == index && index != 8;
     return _tile(icon, label, index, active, null);
   }
 

@@ -15,6 +15,7 @@ class ReportExporter {
   static Future<String> exportSummaryReport({
     required WFPEntry wfp,
     required List<BudgetActivity> activities,
+    String operatingUnit = 'Department of Education',
   }) async {
     final excel = Excel.createExcel();
 
@@ -128,7 +129,7 @@ class ReportExporter {
     // ── Rows 2-5: WFP Header block ────────────────────────────────────────────
     // Row 2: Operating Unit | Fund Type
     setCell(2, 0, 'Operating Unit:', headerLabelStyle);
-    setCell(2, 1, 'Department of Education', headerValueStyle);
+    setCell(2, 1, operatingUnit, headerValueStyle);
     setCell(2, 3, 'Type Fund:', headerLabelStyle);
     setCell(2, 4, wfp.fundType, headerValueStyle);
 
@@ -287,6 +288,7 @@ class ReportExporter {
     required List<WFPEntry> wfps,
     required Map<String, List<BudgetActivity>> activitiesMap,
     required String groupLabel,
+    String operatingUnit = 'Department of Education',
   }) async {
     final excel = Excel.createExcel();
     excel.rename('Sheet1', 'Grouped Report');
@@ -389,7 +391,7 @@ class ReportExporter {
 
       // Header block
       setCell(currentRow, 0, 'Operating Unit:', headerLabelStyle);
-      setCell(currentRow, 1, 'Department of Education', headerValueStyle);
+      setCell(currentRow, 1, operatingUnit, headerValueStyle);
       setCell(currentRow, 3, 'Type Fund:', headerLabelStyle);
       setCell(currentRow, 4, wfp.fundType, headerValueStyle);
       currentRow++;
